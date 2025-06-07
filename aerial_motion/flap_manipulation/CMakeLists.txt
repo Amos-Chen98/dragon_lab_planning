@@ -31,4 +31,3 @@ add_dependencies(flap_manipulation ${catkin_EXPORTED_TARGETS})
 
 add_executable(flap_manipulation_node src/flap_manipulation_node.cpp)
 target_link_libraries(flap_manipulation_node flap_manipulation ${catkin_LIBRARIES})
-target_link_libraries(flap_manipulation_node differential_kinematics_planner_core end_effector_ik_solver_core)
