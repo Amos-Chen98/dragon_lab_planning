@@ -12,5 +12,6 @@
   <depend>roscpp</depend>
   <depend>rospy</depend>
   <depend>squeeze_navigation</depend>
+  <depend>differential_kinematics</depend>
 
 </package>

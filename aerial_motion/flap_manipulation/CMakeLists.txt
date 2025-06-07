@@ -6,10 +6,12 @@ add_compile_options(-std=c++17)
 
 find_package(catkin REQUIRED COMPONENTS
   squeeze_navigation
+  differential_kinematics
   )
 
 catkin_package(
   INCLUDE_DIRS include
+  CATKIN_DEPENDS squeeze_navigation differential_kinematics
   DEPENDS system_lib
 )
 
@@ -29,3 +31,4 @@ add_dependencies(flap_manipulation ${catkin_EXPORTED_TARGETS})
 
 add_executable(flap_manipulation_node src/flap_manipulation_node.cpp)
 target_link_libraries(flap_manipulation_node flap_manipulation ${catkin_LIBRARIES})
+target_link_libraries(flap_manipulation_node differential_kinematics_planner_core end_effector_ik_solver_core)
