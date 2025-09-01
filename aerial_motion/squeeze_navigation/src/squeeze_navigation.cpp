@@ -94,6 +94,10 @@ SqueezeNavigation::SqueezeNavigation(ros::NodeHandle nh, ros::NodeHandle nhp):
 
   /* navigation timer */
   navigate_timer_ = nh_.createTimer(ros::Duration(1.0 / controller_freq_), &SqueezeNavigation::process, this);
+  
+  /* initialize logging system */
+  initializeSession();
+  
   reset();
 }
 
@@ -134,6 +138,12 @@ void SqueezeNavigation::reset()
   return_flag_ = false;
   state_index_ = 0;
   max_joint_vel_ = 0;
+
+  /* reset logging variables - only log if planning actually started */
+  if (session_active_ && planning_started_) {
+    logSession(); // Log the previous session only if planning actually started
+  }
+  initializeSession();
 
   path_planner_->reset();
 }
@@ -242,6 +252,14 @@ void SqueezeNavigation::pathSearch()
       plan_flag_ = false;
       move_flag_ = false; // disable the real motion
 
+      /* start timing for planning */
+      planning_start_time_ = std::chrono::steady_clock::now();
+      planning_started_ = true; // mark that planning has actually started
+      ROS_INFO("[SqueezeNavigation] Starting path planning...");
+
+      /* capture initial state for logging */
+      captureInitialState();
+
       bool start_squeeze_path_from_real_state;
       nhp_.param("start_squeeze_path_from_real_state", start_squeeze_path_from_real_state, false);
 
@@ -254,6 +272,13 @@ void SqueezeNavigation::pathSearch()
           if(path_planner_->getDiscretePath().size() == 0)
             {
               ROS_ERROR("squeeze navigation: can not get valid discrete path from sampling based method");
+              
+              /* record planning failure and computation time */
+              auto planning_end_time = std::chrono::steady_clock::now();
+              total_computation_time_ += std::chrono::duration<double>(planning_end_time - planning_start_time_).count();
+              plan_success_ = false;
+              mission_success_ = 0; // false
+              
               reset();
               return;
             }
@@ -268,6 +293,13 @@ void SqueezeNavigation::pathSearch()
               if(!real_machine_connect_)
                 {
                   ROS_ERROR("have not received the real robot state, cannot start plan from the real state.");
+                  
+                  /* record planning failure and computation time */
+                  auto planning_end_time = std::chrono::steady_clock::now();
+                  total_computation_time_ += std::chrono::duration<double>(planning_end_time - planning_start_time_).count();
+                  plan_success_ = false;
+                  mission_success_ = 0; // false
+                  
                   reset();
                   return;
                 }
@@ -302,11 +334,34 @@ void SqueezeNavigation::pathSearch()
           if(!path_planner_->plan())
             {
               ROS_ERROR("squeeze navigation: cannot get valid planning result");
+              
+              /* record planning failure and computation time */
+              auto planning_end_time = std::chrono::steady_clock::now();
+              total_computation_time_ += std::chrono::duration<double>(planning_end_time - planning_start_time_).count();
+              plan_success_ = false;
+              mission_success_ = 0; // false
+              
               reset();
               return;
             }
         }
 
+      /* record successful planning and computation time */
+      auto planning_end_time = std::chrono::steady_clock::now();
+      total_computation_time_ += std::chrono::duration<double>(planning_end_time - planning_start_time_).count();
+      plan_success_ = true;
+      mission_success_ = -1; // null - will be determined during navigation
+      
+      /* ensure initial state is captured from planned path */
+      if (!initial_state_captured_ && path_planner_->getDiscretePath().size() > 0) {
+        auto init_state = path_planner_->getDiscreteState(0);
+        initial_rootlink_pose_ = init_state.getRootPoseConst();
+        initial_joint_angles_ = init_state.getJointStateConst();
+        initial_state_captured_ = true;
+        ROS_INFO("[SqueezeNavigation] Captured initial state from successful planning result");
+      }
+      
+      ROS_INFO("[SqueezeNavigation] Path planning completed successfully in %.3f seconds", total_computation_time_);
 
       if (start_squeeze_path_from_real_state) startNavigate(); // autonatically start
     }
@@ -608,6 +663,9 @@ void SqueezeNavigation::pathNavigate(const std::vector<MultilinkState>& discrete
     {
       ROS_INFO("[SqueezeNavigation] Finish Navigation");
       move_flag_ = false;
+      
+      /* mark mission as successful */
+      mission_success_ = 1; // true
     }
 }
 
@@ -653,6 +711,7 @@ void SqueezeNavigation::joyStickControl(const sensor_msgs::JoyConstPtr & joy_msg
     {
       ROS_INFO("[SqueezeNavigation] Receive force landing command, stop navigation.");
       move_flag_ = false;
+      mission_success_ = 0; // false - forced stop
       return;
     }
 
@@ -661,6 +720,166 @@ void SqueezeNavigation::joyStickControl(const sensor_msgs::JoyConstPtr & joy_msg
     {
       ROS_INFO("[SqueezeNavigation] Receive normal landing command, stop navigation.");
       move_flag_ = false;
+      mission_success_ = 0; // false - manual stop
       return;
     }
+}
+
+void SqueezeNavigation::initializeSession()
+{
+  session_start_time_ = std::chrono::steady_clock::now();
+  session_timestamp_ = getCurrentTimestamp();
+  total_computation_time_ = 0.0;
+  plan_success_ = false;
+  mission_success_ = -1; // null
+  session_active_ = true;
+  planning_started_ = false; // planning hasn't started yet
+  initial_state_captured_ = false;
+  
+  ROS_INFO("[SqueezeNavigation] Session initialized at %s", session_timestamp_.c_str());
+}
+
+void SqueezeNavigation::logSession()
+{
+  if (!session_active_) return;
+  
+  try {
+    std::string filename = "planning_session_" + getTimestampForFilename() + ".json";
+    std::string filepath = "/home/chen/projects/motion_planning_ws/src/motion_planning/aerial_motion/squeeze_navigation/logs/" + filename;
+    
+    std::ofstream logfile(filepath);
+    if (!logfile.is_open()) {
+      ROS_ERROR("[SqueezeNavigation] Failed to open log file: %s", filepath.c_str());
+      return;
+    }
+    
+    // Convert mission_success to JSON format
+    std::string mission_success_str;
+    if (mission_success_ == -1) {
+      mission_success_str = "null";
+    } else if (mission_success_ == 0) {
+      mission_success_str = "false";
+    } else {
+      mission_success_str = "true";
+    }
+    
+    logfile << "{\n";
+    logfile << "  \"session_info\": {\n";
+    logfile << "    \"timestamp\": \"" << session_timestamp_ << "\",\n";
+    logfile << "    \"world_name\": \"gap\",\n";
+    logfile << "    \"computation_time_sec\": " << std::fixed << std::setprecision(3) << total_computation_time_ << ",\n";
+    logfile << "    \"plan_success\": " << (plan_success_ ? "true" : "false") << ",\n";
+    logfile << "    \"mission_success\": " << mission_success_str << "\n";
+    logfile << "  }";
+    
+    // Add initial state information if captured
+    if (initial_state_captured_) {
+      // Calculate yaw from quaternion
+      tf::Quaternion quat;
+      tf::quaternionMsgToTF(initial_rootlink_pose_.orientation, quat);
+      double yaw = tf::getYaw(quat);
+      
+      logfile << ",\n";
+      logfile << "  \"initial_state\": {\n";
+      logfile << "    \"rootlink_position\": {\n";
+      logfile << "      \"x\": " << std::fixed << std::setprecision(3) << initial_rootlink_pose_.position.x << ",\n";
+      logfile << "      \"y\": " << std::fixed << std::setprecision(3) << initial_rootlink_pose_.position.y << "\n";
+      logfile << "    },\n";
+      logfile << "    \"rootlink_yaw\": " << std::fixed << std::setprecision(3) << yaw << ",\n";
+      logfile << "    \"joint_angles\": [\n";
+      
+      // Write only the actual robot joint angles (exclude redundant zeros)
+      auto joint_indices = robot_model_ptr_->getLinkJointIndices();
+      for (int i = 0; i < joint_indices.size(); ++i) {
+        logfile << "      " << std::fixed << std::setprecision(3) << initial_joint_angles_(joint_indices[i]);
+        if (i < joint_indices.size() - 1) {
+          logfile << ",";
+        }
+        logfile << "\n";
+      }
+      
+      logfile << "    ]\n";
+      logfile << "  }\n";
+    } else {
+      logfile << "\n";
+    }
+    
+    logfile << "}\n";
+    
+    logfile.close();
+    session_active_ = false;
+    
+    ROS_INFO("[SqueezeNavigation] Session logged to: %s", filename.c_str());
+    ROS_INFO("[SqueezeNavigation] Session summary - Computation time: %.3f sec, Plan success: %s, Mission success: %s", 
+             total_computation_time_, 
+             plan_success_ ? "true" : "false",
+             mission_success_str.c_str());
+  }
+  catch (const std::exception& e) {
+    ROS_ERROR("[SqueezeNavigation] Error logging session: %s", e.what());
+  }
+}
+
+std::string SqueezeNavigation::getCurrentTimestamp()
+{
+  auto now = std::chrono::system_clock::now();
+  auto time_t = std::chrono::system_clock::to_time_t(now);
+  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+  
+  std::stringstream ss;
+  ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
+  ss << "." << std::setfill('0') << std::setw(3) << ms.count();
+  
+  return ss.str();
+}
+
+std::string SqueezeNavigation::getTimestampForFilename()
+{
+  auto now = std::chrono::system_clock::now();
+  auto time_t = std::chrono::system_clock::to_time_t(now);
+  
+  std::stringstream ss;
+  ss << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
+  
+  return ss.str();
+}
+
+void SqueezeNavigation::captureInitialState()
+{
+  if (initial_state_captured_) return; // Already captured for this session
+  
+  try {
+    // Capture initial state from either real robot or planning start state
+    if (real_machine_connect_ && robot_baselink_odom_.header.stamp.toSec() > 0.0) {
+      // Use real robot state
+      MultilinkState::convertBaselinkPose2RootPose(robot_model_ptr_, robot_baselink_odom_.pose.pose, joint_state_, initial_rootlink_pose_);
+      initial_joint_angles_ = joint_state_;
+      initial_state_captured_ = true;
+      ROS_INFO("[SqueezeNavigation] Captured initial state from real robot");
+    } else {
+      // Try to get from path planner if available
+      if (path_planner_ && path_planner_->getDiscretePath().size() > 0) {
+        auto init_state = path_planner_->getDiscreteState(0);
+        initial_rootlink_pose_ = init_state.getRootPoseConst();
+        initial_joint_angles_ = init_state.getJointStateConst();
+        initial_state_captured_ = true;
+        ROS_INFO("[SqueezeNavigation] Captured initial state from path planner");
+      } else {
+        ROS_WARN("[SqueezeNavigation] Cannot capture initial state - no robot connection or planned path");
+      }
+    }
+    
+    if (initial_state_captured_) {
+      // Log captured state for debugging
+      tf::Quaternion quat;
+      tf::quaternionMsgToTF(initial_rootlink_pose_.orientation, quat);
+      double yaw = tf::getYaw(quat);
+      
+      ROS_INFO("[SqueezeNavigation] Initial state - Position: (%.3f, %.3f), Yaw: %.3f, Joint count: %d", 
+               initial_rootlink_pose_.position.x, initial_rootlink_pose_.position.y, yaw, (int)initial_joint_angles_.rows());
+    }
+  }
+  catch (const std::exception& e) {
+    ROS_ERROR("[SqueezeNavigation] Error capturing initial state: %s", e.what());
+  }
 }

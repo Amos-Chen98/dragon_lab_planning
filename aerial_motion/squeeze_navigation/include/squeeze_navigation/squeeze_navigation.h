@@ -60,17 +60,26 @@
 
 /* utils */
 #include <tf/LinearMath/Transform.h>
+#include <tf/tf.h>
 #include <boost/thread/mutex.hpp>
 #include <boost/thread.hpp>
 #include <iostream>
 #include <vector>
 #include <boost/algorithm/clamp.hpp>
+#include <fstream>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
 
 
 class SqueezeNavigation{
 public:
   SqueezeNavigation(ros::NodeHandle nh, ros::NodeHandle nhp);
-  ~SqueezeNavigation(){}
+  ~SqueezeNavigation(){
+    if (session_active_ && planning_started_) {
+      logSession();
+    }
+  }
 
 protected:
   ros::NodeHandle nh_;
@@ -128,6 +137,21 @@ protected:
   double start_return_time_;
   double max_joint_vel_; //debug
 
+  /* logging system */
+  std::chrono::steady_clock::time_point session_start_time_;
+  std::chrono::steady_clock::time_point planning_start_time_;
+  double total_computation_time_;
+  std::string session_timestamp_;
+  bool plan_success_;
+  int mission_success_; // -1: null, 0: false, 1: true
+  bool session_active_;
+  bool planning_started_; // flag to track if planning has actually started
+  
+  /* initial state logging */
+  geometry_msgs::Pose initial_rootlink_pose_;
+  KDL::JntArray initial_joint_angles_;
+  bool initial_state_captured_;
+
 
   /* robot model */
   boost::shared_ptr<HydrusRobotModel> robot_model_ptr_;
@@ -156,6 +180,13 @@ protected:
 
   virtual void reset();
   void startNavigate();
+
+  /* logging functions */
+  void initializeSession();
+  void logSession();
+  std::string getCurrentTimestamp();
+  std::string getTimestampForFilename();
+  void captureInitialState();
 
 };
 
