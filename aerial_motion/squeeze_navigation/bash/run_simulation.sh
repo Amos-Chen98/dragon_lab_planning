@@ -32,7 +32,7 @@ sleep 10
 # Publish the topic in a new tab
 gnome-terminal --tab -- bash -lc "rostopic pub -1 /hydrus/plan_start std_msgs/Empty '{}'"
 
-sleep 60
+sleep 90
 
 # Shut down all
 pkill -f roslaunch
