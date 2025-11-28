@@ -121,3 +121,14 @@ target_link_libraries (se2_end_effector_ik_node ${catkin_LIBRARIES} end_effector
 
 add_executable (se3_end_effector_ik_node src/motion/sample/se3_end_effector_ik_node.cpp)
 target_link_libraries (se3_end_effector_ik_node ${catkin_LIBRARIES} end_effector_ik_solver_core)
+
+#############
+## Install ##
+#############
+
+# Install Python scripts
+catkin_install_python(PROGRAMS
+  scripts/interactive_marker.py
+  scripts/pose_transformer.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)

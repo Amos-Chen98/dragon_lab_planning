@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Launch interactive marker node -->
+    <node pkg="differential_kinematics" type="interactive_marker.py" name="interactive_marker" output="screen">
+        <param name="frame_id" value="world" />
+    </node>
+
+    <!-- Launch pose transformer node -->
+    <node pkg="differential_kinematics" type="pose_transformer.py" name="pose_transformer" output="screen">
+        <param name="handover_dis_x" value="0.2" />
+        <param name="handover_dis_z" value="0.2" />
+        <param name="handover_pitch" value="0.2" />
+    </node>
+
+    <!-- Launch RViz -->
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find differential_kinematics)/config/hri/hri_demo.rviz" required="true" />
+
+</launch>
